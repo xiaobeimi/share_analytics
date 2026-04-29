@@ -8,6 +8,12 @@ from .base import Strategy
 
 
 class MomentumStrategy(Strategy):
+    """时间序列动量策略。
+
+    N 日收益率向上穿越阈值时买入，向下穿越阈值时卖出。
+    默认阈值为 0，即动量由负转正买、由正转负卖。
+    """
+
     name = "momentum"
 
     def __init__(self, lookback: int = 20, threshold: float = 0.0) -> None:
@@ -21,9 +27,11 @@ class MomentumStrategy(Strategy):
         signals = data.copy()
         signals["momentum"] = rate_of_change(signals["close"], lookback=self.lookback)
 
+        # 动量转强。
         buy_signal = (signals["momentum"] > self.threshold) & (
             signals["momentum"].shift(1) <= self.threshold
         )
+        # 动量转弱。
         sell_signal = (signals["momentum"] < self.threshold) & (
             signals["momentum"].shift(1) >= self.threshold
         )
@@ -31,5 +39,6 @@ class MomentumStrategy(Strategy):
         signals["signal"] = 0
         signals.loc[buy_signal, "signal"] = 1
         signals.loc[sell_signal, "signal"] = -1
+        # 动量指标需要 lookback 根 K 线才能计算。
         signals.iloc[: self.lookback, signals.columns.get_loc("signal")] = 0
         return signals

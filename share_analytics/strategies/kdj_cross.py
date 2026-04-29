@@ -8,6 +8,11 @@ from .base import Strategy
 
 
 class KDJCrossStrategy(Strategy):
+    """KDJ 低位金叉/高位死叉策略。
+
+    J 线上穿 D 线且仍处于超卖区时买入；J 线下穿 D 线且仍处于超买区时卖出。
+    """
+
     name = "kdj_cross"
 
     def __init__(
@@ -42,11 +47,13 @@ class KDJCrossStrategy(Strategy):
         )
         signals = signals.join(kdj_frame)
 
+        # 低位金叉：要求 J 上穿 D，并且 J 仍低于超卖阈值。
         golden_cross = (
             (signals["kdj_j"] > signals["kdj_d"])
             & (signals["kdj_j"].shift(1) <= signals["kdj_d"].shift(1))
             & (signals["kdj_j"] < self.oversold)
         )
+        # 高位死叉：要求 J 下穿 D，并且 J 仍高于超买阈值。
         death_cross = (
             (signals["kdj_j"] < signals["kdj_d"])
             & (signals["kdj_j"].shift(1) >= signals["kdj_d"].shift(1))
@@ -56,5 +63,6 @@ class KDJCrossStrategy(Strategy):
         signals["signal"] = 0
         signals.loc[golden_cross, "signal"] = 1
         signals.loc[death_cross, "signal"] = -1
+        # RSV 需要 n 根 K 线形成，预热区不交易。
         signals.iloc[: self.n, signals.columns.get_loc("signal")] = 0
         return signals

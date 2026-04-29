@@ -8,6 +8,11 @@ from .base import Strategy
 
 
 class DonchianBreakoutStrategy(Strategy):
+    """Donchian 通道突破策略。
+
+    收盘价突破前 N 日高点时买入，跌破前 N 日低点时卖出。
+    """
+
     name = "donchian_breakout"
 
     def __init__(self, window: int = 20) -> None:
@@ -27,6 +32,7 @@ class DonchianBreakoutStrategy(Strategy):
         prev_prev_upper = prev_upper.shift(1).fillna(prev_upper)
         prev_prev_lower = prev_lower.shift(1).fillna(prev_lower)
 
+        # 使用前一日通道边界，避免把当天高低点纳入突破判断。
         buy_signal = (signals["close"] > prev_upper) & (
             signals["close"].shift(1) <= prev_prev_upper
         )
@@ -37,5 +43,6 @@ class DonchianBreakoutStrategy(Strategy):
         signals["signal"] = 0
         signals.loc[buy_signal, "signal"] = 1
         signals.loc[sell_signal, "signal"] = -1
+        # 通道形成前没有有效边界。
         signals.iloc[: self.window, signals.columns.get_loc("signal")] = 0
         return signals
