@@ -17,6 +17,7 @@
 - 使用 `akshare` 获取 A 股日线数据
 - 统一使用前复权 `qfq` 数据，避免分红、送转等权益调整造成价格断点
 - 默认优先读取本地缓存，未命中时再请求远端；主源失败时自动回退到 `akshare` 的备用日线源
+- 支持基于实时快照的 A 股选股：市值、倍量、ST 和行业过滤
 - 当天收盘后根据指标生成信号
 - 当前 K 线按收盘价成交
 - 单标的、只做多、全仓买入 / 清仓卖出
@@ -37,7 +38,10 @@ share_analytics/
 │   ├── data.py
 │   ├── engine.py
 │   ├── indicators.py
+│   ├── industry_screener.py
 │   ├── models.py
+│   ├── rate_limit.py
+│   ├── screener.py
 │   ├── cli.py
 │   └── strategies/
 │       ├── base.py
@@ -51,8 +55,10 @@ share_analytics/
 │       └── rsi_threshold.py
 └── test/
     ├── test_engine.py
+    ├── test_industry_screener.py
     ├── test_macd_strategy.py
-    └── test_other_strategies.py
+    ├── test_other_strategies.py
+    └── test_screener.py
 ```
 
 ## 快速使用
@@ -108,6 +114,94 @@ engine = BacktestEngine(
 result = engine.run(symbol="000001", data=data, strategy=strategy)
 print(result.metrics)
 print(result.equity_curve.tail())
+```
+
+### 3. 选股
+
+筛选条件默认是：
+
+- 先用同花顺“持续放量”接口做预筛，减少后续逐股日线请求
+- 默认用新浪拉取全市场快照和总市值、用腾讯拉取逐股日线，避免依赖单一东财链路
+- 总市值大于 200 亿
+- 当天成交量大于等于前一交易日成交量的 3 倍
+- 过滤 ST 板块及名称包含 ST 的股票
+- 过滤白酒、房地产行业
+- 默认每次 AkShare/API 请求至少间隔 1 秒，可用 `--request-pause-seconds` 调大
+
+其中“持续放量”只用于缩小候选池，最终仍会用最近日线严格校验成交量倍数。需要跳过预筛时可加 `--no-volume-prefilter`。
+
+```bash
+python3 -m share_analytics.cli \
+  --screen \
+  --as-of 20260430 \
+  --min-market-cap-yi 200 \
+  --volume-multiple 3 \
+  --exclude-industry 白酒,房地产 \
+  --request-pause-seconds 1.5 \
+  --spot-source sina \
+  --daily-source tencent \
+  --output picks.csv
+```
+
+收盘后筛选“当日成交量比上一交易日放量 1 倍以上”的日报，可以把倍数设为 `2`，并关闭默认市值和行业过滤：
+
+```bash
+python3 -m share_analytics.cli \
+  --screen \
+  --as-of 20260430 \
+  --min-market-cap-yi 0 \
+  --volume-multiple 2 \
+  --include-all-industries \
+  --request-pause-seconds 1.5 \
+  --spot-source sina \
+  --daily-source tencent \
+  --output reports/a_share_volume_spike_20260430.csv
+```
+
+仓库内置 GitHub Actions 工作流 `.github/workflows/a-share-volume-spike.yml`，默认在 A 股工作日北京时间 17:30 执行。工作流使用 `concurrency` 串行化同类任务，并通过 `--request-pause-seconds 1.5` 控制外部请求频率；结果会写入 `reports/a_share_volume_spike_YYYYMMDD.csv` 并上传为 artifact。
+
+为避免对后端接口造成过高压力，工作流默认保留同花顺“持续放量”预筛，再逐股用最近两个实际交易日的日线成交量做最终校验。如果需要完全跳过预筛，可以在命令中增加 `--no-volume-prefilter`，但这会显著增加逐股日线请求数量。
+
+如需让 GitHub Actions 邮件发送结果，需要在仓库 secrets 中配置 `SMTP_HOST`、`SMTP_USERNAME`、`SMTP_PASSWORD`，可选配置 `SMTP_PORT` 和 `SMTP_FROM`。手动触发时 `recipient_email` 默认是 `hfutzhanghb@163.com`。
+
+代码方式调用：
+
+```python
+from datetime import date
+
+from share_analytics.screener import (
+    AkshareScreenerDataProvider,
+    StockScreenerConfig,
+    screen_volume_spike_stocks,
+)
+
+provider = AkshareScreenerDataProvider()
+result = screen_volume_spike_stocks(
+    provider,
+    StockScreenerConfig(as_of=date(2026, 4, 30)),
+)
+print(result)
+```
+
+### 4. 行业板块 MACD 金叉筛选
+
+筛选条件默认是：
+
+- 拉取全部行业板块
+- 用行业板块日线计算 MACD，默认参数为 12/26/9
+- 只输出截至 `--as-of` 最近一个交易日发生 DIF 上穿 DEA 的行业板块
+- 所有外部请求都经过 `--request-pause-seconds` 控制频率，默认至少间隔 1 秒
+
+默认数据源为同花顺行业板块指数，也可以用 `--industry-source eastmoney` 切到东财。
+
+```bash
+python3 -m share_analytics.cli \
+  --screen-industry-macd \
+  --as-of 20260430 \
+  --industry-source ths \
+  --industry-lookback-days 365 \
+  --request-pause-seconds 1.5 \
+  --output industry_macd.csv
 ```
 
 ## 内置策略

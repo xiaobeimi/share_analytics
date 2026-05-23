@@ -1,0 +1,160 @@
+name: A-share volume spike report
+
+on:
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: "Optional report date in YYYYMMDD, defaults to today in Asia/Shanghai"
+        required: false
+        type: string
+      recipient_email:
+        description: "Report recipient email"
+        required: false
+        type: string
+        default: "hfutzhanghb@163.com"
+  schedule:
+    # 17:30 Asia/Shanghai, Monday-Friday. GitHub cron is UTC.
+    - cron: "30 9 * * 1-5"
+
+concurrency:
+  group: a-share-volume-spike-report
+  cancel-in-progress: false
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run volume spike screener
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          REPORT_DATE="${{ inputs.as_of }}"
+          if [ -z "$REPORT_DATE" ]; then
+            REPORT_DATE="$(date +%Y%m%d)"
+          fi
+          OUTPUT="reports/a_share_volume_spike_${REPORT_DATE}.csv"
+
+          python -m share_analytics.cli \
+            --screen \
+            --as-of "$REPORT_DATE" \
+            --min-market-cap-yi 0 \
+            --volume-multiple 2 \
+            --include-all-industries \
+            --request-pause-seconds 1.5 \
+            --spot-source sina \
+            --daily-source tencent \
+            --limit 200 \
+            --output "$OUTPUT" | tee reports/a_share_volume_spike_${REPORT_DATE}.log
+
+          {
+            echo "## A-share volume spike report ${REPORT_DATE}"
+            echo
+            echo "- Criteria: current trading-day volume >= 2x previous trading-day volume"
+            echo "- Sources: Sina spot snapshot, Tencent daily bars through AkShare"
+            echo "- Candidate reduction: THS volume-expansion prefilter, then daily-bar verification"
+            echo "- Throttle: one external request at least every 1.5 seconds"
+            echo
+            echo '```text'
+            cat reports/a_share_volume_spike_${REPORT_DATE}.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Email report
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          RECIPIENT_EMAIL: ${{ inputs.recipient_email || 'hfutzhanghb@163.com' }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          from email.message import EmailMessage
+          from pathlib import Path
+          import mimetypes
+          import os
+          import smtplib
+          import ssl
+
+          required = ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]
+          missing = [name for name in required if not os.environ.get(name)]
+          if missing:
+              raise SystemExit(f"Missing required SMTP secrets: {', '.join(missing)}")
+
+          report_files = sorted(Path("reports").glob("a_share_volume_spike_*.csv"))
+          log_files = sorted(Path("reports").glob("a_share_volume_spike_*.log"))
+          if not report_files:
+              raise SystemExit("No CSV report found under reports/.")
+
+          report_path = report_files[-1]
+          log_path = log_files[-1] if log_files else None
+          report_date = report_path.stem.removeprefix("a_share_volume_spike_")
+          sender = os.environ.get("SMTP_FROM") or os.environ["SMTP_USERNAME"]
+          recipient = os.environ["RECIPIENT_EMAIL"]
+          port = int(os.environ.get("SMTP_PORT") or "465")
+
+          message = EmailMessage()
+          message["Subject"] = f"A-share volume spike report {report_date}"
+          message["From"] = sender
+          message["To"] = recipient
+          message.set_content(
+              "\n".join(
+                  [
+                      f"A-share volume spike report for {report_date}.",
+                      "",
+                      "Criteria: current trading-day volume >= 2x previous trading-day volume.",
+                      "The CSV report is attached.",
+                  ]
+              )
+          )
+
+          for path in [report_path, log_path]:
+              if path is None:
+                  continue
+              content_type, _ = mimetypes.guess_type(path.name)
+              maintype, subtype = (content_type or "application/octet-stream").split("/", 1)
+              message.add_attachment(
+                  path.read_bytes(),
+                  maintype=maintype,
+                  subtype=subtype,
+                  filename=path.name,
+              )
+
+          if port == 465:
+              with smtplib.SMTP_SSL(os.environ["SMTP_HOST"], port, context=ssl.create_default_context()) as smtp:
+                  smtp.login(os.environ["SMTP_USERNAME"], os.environ["SMTP_PASSWORD"])
+                  smtp.send_message(message)
+          else:
+              with smtplib.SMTP(os.environ["SMTP_HOST"], port) as smtp:
+                  smtp.starttls(context=ssl.create_default_context())
+                  smtp.login(os.environ["SMTP_USERNAME"], os.environ["SMTP_PASSWORD"])
+                  smtp.send_message(message)
+          PY
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: a-share-volume-spike-report
+          path: reports/
+          retention-days: 30

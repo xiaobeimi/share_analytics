@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-import time
 
 import pandas as pd
+
+from share_analytics.rate_limit import RequestRateLimiter
 
 
 class MarketDataProvider(ABC):
@@ -41,6 +42,7 @@ class AkshareDataProvider(MarketDataProvider):
     ) -> None:
         self.cache_dir = Path(cache_dir)
         self.request_pause_seconds = request_pause_seconds
+        self._rate_limiter = RequestRateLimiter(request_pause_seconds)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def get_daily_bars(
@@ -55,7 +57,6 @@ class AkshareDataProvider(MarketDataProvider):
         if cache_path.exists():
             return pd.read_csv(cache_path, index_col="date", parse_dates=["date"])
 
-        time.sleep(self.request_pause_seconds)
         last_error: Exception | None = None
 
         try:
@@ -91,6 +92,7 @@ class AkshareDataProvider(MarketDataProvider):
     ) -> pd.DataFrame:
         import akshare as ak
 
+        self._rate_limiter.wait()
         raw = ak.stock_zh_a_hist(
             symbol=symbol,
             period="daily",
@@ -110,6 +112,7 @@ class AkshareDataProvider(MarketDataProvider):
         import akshare as ak
 
         market_prefixed_symbol = self._to_market_prefixed_symbol(symbol)
+        self._rate_limiter.wait()
         raw = ak.stock_zh_a_daily(
             symbol=market_prefixed_symbol,
             start_date=start_date,
