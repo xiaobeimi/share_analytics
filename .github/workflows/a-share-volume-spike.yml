@@ -1,6 +1,11 @@
 name: A-share volume spike report
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/a-share-volume-spike.yml"
   workflow_dispatch:
     inputs:
       as_of:
@@ -27,6 +32,7 @@ jobs:
     env:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
+      REPORT_DATE_INPUT: ${{ github.event.inputs.as_of || '' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -46,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p reports
-          REPORT_DATE="${{ inputs.as_of }}"
+          REPORT_DATE="$REPORT_DATE_INPUT"
           if [ -z "$REPORT_DATE" ]; then
             REPORT_DATE="$(date +%Y%m%d)"
           fi
@@ -79,12 +85,12 @@ jobs:
 
       - name: Email report
         env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST || vars.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || vars.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          SMTP_FROM: ${{ secrets.SMTP_FROM }}
-          RECIPIENT_EMAIL: ${{ inputs.recipient_email || 'hfutzhanghb@163.com' }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM || vars.SMTP_FROM }}
+          RECIPIENT_EMAIL: ${{ github.event.inputs.recipient_email || vars.RECIPIENT_EMAIL || 'hfutzhanghb@163.com' }}
         run: |
           set -euo pipefail
           python - <<'PY'
