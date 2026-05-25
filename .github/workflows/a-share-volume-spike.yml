@@ -96,7 +96,9 @@ jobs:
           python - <<'PY'
           from __future__ import annotations
 
+          import csv
           from email.message import EmailMessage
+          from html import escape
           from pathlib import Path
           import mimetypes
           import os
@@ -119,6 +121,60 @@ jobs:
           sender = os.environ.get("SMTP_FROM") or os.environ["SMTP_USERNAME"]
           recipient = os.environ["RECIPIENT_EMAIL"]
           port = int(os.environ.get("SMTP_PORT") or "465")
+          rows = list(csv.DictReader(report_path.open(encoding="utf-8")))
+
+          columns = [
+              ("symbol", "代码"),
+              ("name", "公司名称"),
+              ("industry", "行业"),
+              ("latest_price", "股价"),
+              ("previous_volume", "上一交易日成交量"),
+              ("current_volume", "当日成交量"),
+              ("volume_ratio", "倍数"),
+              ("trade_date", "交易日"),
+              ("previous_trade_date", "上一交易日"),
+          ]
+
+          def format_value(column: str, value: str) -> str:
+              if value is None or value == "":
+                  return ""
+              if column in {"latest_price", "volume_ratio"}:
+                  return f"{float(value):.2f}"
+              if column in {"previous_volume", "current_volume"}:
+                  return f"{float(value):,.0f}"
+              if column in {"trade_date", "previous_trade_date"}:
+                  return value.split()[0]
+              return value
+
+          def markdown_table(max_rows: int = 50) -> str:
+              header = "| " + " | ".join(label for _, label in columns) + " |"
+              separator = "| " + " | ".join("---" for _ in columns) + " |"
+              body = [
+                  "| "
+                  + " | ".join(format_value(column, row.get(column, "")) for column, _ in columns)
+                  + " |"
+                  for row in rows[:max_rows]
+              ]
+              if len(rows) > max_rows:
+                  body.append(f"| ... | 共 {len(rows)} 条，正文仅展示前 {max_rows} 条，其余见附件 |  |  |  |  |  |  |  |")
+              return "\n".join([header, separator, *body])
+
+          def html_table() -> str:
+              table_head = "".join(
+                  f"<th>{escape(label)}</th>" for _, label in columns
+              )
+              table_rows = []
+              for row in rows:
+                  cells = "".join(
+                      f"<td>{escape(format_value(column, row.get(column, '')))}</td>"
+                      for column, _ in columns
+                  )
+                  table_rows.append(f"<tr>{cells}</tr>")
+              if not table_rows:
+                  table_rows.append(
+                      f"<tr><td colspan=\"{len(columns)}\">No matching stocks.</td></tr>"
+                  )
+              return f"<table><thead><tr>{table_head}</tr></thead><tbody>{''.join(table_rows)}</tbody></table>"
 
           message = EmailMessage()
           message["Subject"] = f"A-share volume spike report {report_date}"
@@ -130,9 +186,62 @@ jobs:
                       f"A-share volume spike report for {report_date}.",
                       "",
                       "Criteria: current trading-day volume >= 2x previous trading-day volume.",
-                      "The CSV report is attached.",
+                      f"Selected: {len(rows)}",
+                      "",
+                      markdown_table(),
+                      "",
+                      "CSV and log files are attached.",
                   ]
               )
+          )
+          message.add_alternative(
+              f"""\
+          <!doctype html>
+          <html>
+            <head>
+              <meta charset="utf-8">
+              <style>
+                body {{
+                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                  color: #17202a;
+                  line-height: 1.45;
+                }}
+                table {{
+                  border-collapse: collapse;
+                  width: 100%;
+                  margin-top: 16px;
+                  font-size: 13px;
+                }}
+                th, td {{
+                  border: 1px solid #d6dde5;
+                  padding: 8px 10px;
+                  text-align: right;
+                  white-space: nowrap;
+                }}
+                th {{
+                  background: #eef3f8;
+                  color: #0f172a;
+                  font-weight: 600;
+                }}
+                td:nth-child(2), td:nth-child(3),
+                th:nth-child(2), th:nth-child(3) {{
+                  text-align: left;
+                }}
+                .summary {{
+                  margin: 0 0 12px;
+                  color: #334155;
+                }}
+              </style>
+            </head>
+            <body>
+              <h2>A-share volume spike report {escape(report_date)}</h2>
+              <p class="summary">Criteria: current trading-day volume &gt;= 2x previous trading-day volume.</p>
+              <p class="summary">Selected: {len(rows)}. CSV and log files are attached.</p>
+              {html_table()}
+            </body>
+          </html>
+          """,
+              subtype="html",
           )
 
           for path in [report_path, log_path]:
