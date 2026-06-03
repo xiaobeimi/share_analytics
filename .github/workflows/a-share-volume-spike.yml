@@ -18,8 +18,9 @@ on:
         type: string
         default: "hfutzhanghb@163.com"
   schedule:
-    # 15:30 Asia/Shanghai, Monday-Friday. GitHub cron is UTC.
-    - cron: "30 7 * * 1-5"
+    # 16:00 Asia/Shanghai, Monday-Friday.
+    - cron: "0 16 * * 1-5"
+      timezone: "Asia/Shanghai"
 
 concurrency:
   group: a-share-volume-spike-report
