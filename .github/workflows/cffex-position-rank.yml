@@ -29,11 +29,12 @@ concurrency:
 
 jobs:
   report:
+    if: github.event_name == 'schedule' || contains(github.event.head_commit.message, 'RUN_ONCE')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       TZ: Asia/Shanghai
-      REPORT_DATE_INPUT: ${{ github.event.inputs.as_of || '' }}
+      REPORT_DATE_INPUT: ${{ github.event_name == 'push' && '20260820' || '' }}
       RECIPIENT_EMAIL: ${{ github.event.inputs.recipient_email || vars.RECIPIENT_EMAIL || 'hfutzhanghb@163.com' }}
     steps:
       - name: Check out repository
