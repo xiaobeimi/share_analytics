@@ -202,11 +202,3 @@ jobs:
                   smtp.login(os.environ["SMTP_USERNAME"], os.environ["SMTP_PASSWORD"])
                   smtp.send_message(message)
           PY
-
-      - name: Upload report artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cffex-position-rank-report
-          path: reports/
-          retention-days: 30
