@@ -120,11 +120,25 @@ jobs:
               ("long_hands", "多单"),
               ("short_hands", "空单"),
               ("net_hands", "净量"),
+              ("long_change", "多单增减"),
+              ("short_change", "空单增减"),
+              ("net_change", "净量增减"),
+              ("long_short_ratio", "多空比"),
+              ("net_ratio", "净量占比"),
           ]
 
           def format_value(column: str, value: str) -> str:
-              if column in {"long_hands", "short_hands", "net_hands"}:
+              if column in {
+                  "long_hands",
+                  "short_hands",
+                  "net_hands",
+                  "long_change",
+                  "short_change",
+                  "net_change",
+              }:
                   return f"{int(value):,}"
+              if column in {"long_short_ratio", "net_ratio"}:
+                  return f"{float(value):.2%}"
               return value
 
           header = "| " + " | ".join(label for _, label in columns) + " |"

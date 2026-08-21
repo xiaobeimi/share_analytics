@@ -14,6 +14,7 @@ import pandas as pd
 DEFAULT_CFFEX_STOCK_INDEX_VARIETIES = ("IF", "IH", "IC", "IM")
 CFFEX_POSITION_RANK_URL = "http://www.cffex.com.cn/sj/ccpm/{month}/{day}/{variety}_1.csv"
 CITIC_FUTURES_PREFIX = "中信期货"
+SUMMARY_SYMBOL = "合计"
 
 _RAW_COLUMNS = (
     "trade_date",
@@ -132,10 +133,33 @@ def build_cffex_position_rank_report(
         variety = _variety_from_symbol(str(symbol))
         long_total = int(pd.to_numeric(contract["long_open_interest"], errors="coerce").sum())
         short_total = int(pd.to_numeric(contract["short_open_interest"], errors="coerce").sum())
-        rows.append(_report_row(as_of, variety, str(symbol), "前20名", long_total, short_total))
+        long_change = int(pd.to_numeric(contract["long_open_interest_chg"], errors="coerce").sum())
+        short_change = int(pd.to_numeric(contract["short_open_interest_chg"], errors="coerce").sum())
+        rows.append(
+            _report_row(
+                as_of,
+                variety,
+                str(symbol),
+                "前20名",
+                long_total,
+                short_total,
+                long_change,
+                short_change,
+            )
+        )
 
         citic_long = _member_position(contract, "long_party_name", "long_open_interest")
         citic_short = _member_position(contract, "short_party_name", "short_open_interest")
+        citic_long_change = _member_position(
+            contract,
+            "long_party_name",
+            "long_open_interest_chg",
+        )
+        citic_short_change = _member_position(
+            contract,
+            "short_party_name",
+            "short_open_interest_chg",
+        )
         rows.append(
             _report_row(
                 as_of,
@@ -144,16 +168,22 @@ def build_cffex_position_rank_report(
                 "中信期货",
                 citic_long,
                 citic_short,
+                citic_long_change,
+                citic_short_change,
             )
         )
 
     if not rows:
         raise RuntimeError(f"CFFEX stock-index futures contracts not found for {as_of:%Y%m%d}")
     result = pd.DataFrame(rows)
+    summary_rows = _build_variety_summary_rows(result)
+    if summary_rows:
+        result = pd.concat([result, pd.DataFrame(summary_rows)], ignore_index=True)
     variety_order = {name: index for index, name in enumerate(effective_config.varieties)}
     result["_variety_order"] = result["variety"].map(variety_order)
     result = result.sort_values(
-        ["_variety_order", "symbol", "scope"], ascending=[True, True, True]
+        ["_variety_order", "symbol", "scope"],
+        ascending=[True, True, True],
     ).drop(columns="_variety_order")
     return result.reset_index(drop=True)
 
@@ -220,7 +250,12 @@ def _report_row(
     scope: str,
     long_hands: int,
     short_hands: int,
+    long_change: int,
+    short_change: int,
 ) -> dict[str, object]:
+    long_short_ratio = long_hands / short_hands if short_hands else None
+    total_hands = long_hands + short_hands
+    net_ratio = (long_hands - short_hands) / total_hands if total_hands else None
     return {
         "trade_date": as_of.strftime("%Y%m%d"),
         "variety": variety,
@@ -229,7 +264,47 @@ def _report_row(
         "long_hands": long_hands,
         "short_hands": short_hands,
         "net_hands": long_hands - short_hands,
+        "long_change": long_change,
+        "short_change": short_change,
+        "net_change": long_change - short_change,
+        "long_short_ratio": long_short_ratio,
+        "net_ratio": net_ratio,
     }
+
+
+def _build_variety_summary_rows(report: pd.DataFrame) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for variety, group in report.groupby("variety", sort=False):
+        trade_date = str(group["trade_date"].iloc[0])
+        for scope in ("前20名", "中信期货"):
+            cut = group[group["scope"] == scope]
+            if cut.empty:
+                continue
+            long_hands = int(cut["long_hands"].sum())
+            short_hands = int(cut["short_hands"].sum())
+            long_change = int(cut["long_change"].sum())
+            short_change = int(cut["short_change"].sum())
+            rows.append(
+                {
+                    "trade_date": trade_date,
+                    "variety": variety,
+                    "symbol": SUMMARY_SYMBOL,
+                    "scope": f"{scope}合计",
+                    "long_hands": long_hands,
+                    "short_hands": short_hands,
+                    "net_hands": long_hands - short_hands,
+                    "long_change": long_change,
+                    "short_change": short_change,
+                    "net_change": long_change - short_change,
+                    "long_short_ratio": long_hands / short_hands if short_hands else None,
+                    "net_ratio": (
+                        (long_hands - short_hands) / (long_hands + short_hands)
+                        if long_hands + short_hands
+                        else None
+                    ),
+                }
+            )
+    return rows
 
 
 def _variety_from_symbol(symbol: str) -> str:

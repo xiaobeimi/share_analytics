@@ -53,6 +53,21 @@ def test_builds_top20_and_citic_rows() -> None:
     citic = report[report["scope"] == "中信期货"].iloc[0]
     assert (top20["long_hands"], top20["short_hands"], top20["net_hands"]) == (500, 150, 350)
     assert (citic["long_hands"], citic["short_hands"], citic["net_hands"]) == (300, 50, 250)
+    assert (top20["long_change"], top20["short_change"], top20["net_change"]) == (5, 1, 4)
+    assert (citic["long_change"], citic["short_change"], citic["net_change"]) == (10, 4, 6)
+
+
+def test_builds_variety_summary_rows() -> None:
+    provider = FakeCffexProvider(_raw_frame())
+    config = CffexPositionRankConfig(as_of=date(2026, 8, 20), varieties=("IF",))
+
+    report = build_cffex_position_rank_report(provider, config)
+
+    top20_summary = report[report["scope"] == "前20名合计"].iloc[0]
+    citic_summary = report[report["scope"] == "中信期货合计"].iloc[0]
+    assert top20_summary["symbol"] == "合计"
+    assert (top20_summary["long_hands"], top20_summary["short_hands"]) == (500, 150)
+    assert (citic_summary["long_hands"], citic_summary["short_hands"]) == (300, 50)
 
 
 def test_citic_row_is_zero_when_member_is_not_in_top20() -> None:
