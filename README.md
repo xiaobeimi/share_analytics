@@ -204,6 +204,22 @@ python3 -m share_analytics.cli \
   --output industry_macd.csv
 ```
 
+### 5. 中金所股指期货持仓排名
+
+收盘后统计中金所股指期货 IF、IH、IC、IM 的成交持仓排名。每个合约输出两行：
+
+- `前20名`：持买单量排名 1-20 的合计、持卖单量排名 1-20 的合计，以及净量（多单 - 空单）
+- `中信期货`：该合约多空榜内以 `中信期货` 开头的会员持买单量、持卖单量和净量；不在对应前 20 名榜单内时按 0 处理
+
+```bash
+python3 -m share_analytics.cli \
+  --cffex-position-rank \
+  --as-of 20260820 \
+  --output reports/cffex_position_rank_20260820.csv
+```
+
+数据来自中金所官网成交持仓排名 CSV：`http://www.cffex.com.cn/sj/ccpm/YYYYMM/DD/IF_1.csv`。GitHub Actions 会在工作日北京时间 18:10 自动运行，并把 CSV 上传为 artifact；如果当天数据尚未发布，任务会明确失败，不会回退到前一交易日。
+
 ## 内置策略
 
 - 趋势类

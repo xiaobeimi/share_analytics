@@ -7,6 +7,12 @@ from pathlib import Path
 import pandas as pd
 
 from share_analytics.data import AkshareDataProvider
+from share_analytics.cffex_positions import (
+    DEFAULT_CFFEX_STOCK_INDEX_VARIETIES,
+    CffexPositionRankConfig,
+    OfficialCffexPositionRankProvider,
+    build_cffex_position_rank_report,
+)
 from share_analytics.engine import BacktestEngine
 from share_analytics.industry_screener import (
     DEFAULT_INDUSTRY_MACD_LOOKBACK_DAYS,
@@ -43,6 +49,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--screen-industry-macd",
         action="store_true",
         help="Run the industry-board MACD golden-cross screener.",
+    )
+    parser.add_argument(
+        "--cffex-position-rank",
+        action="store_true",
+        help="Run the CFFEX stock-index futures position-rank report.",
     )
     parser.add_argument(
         "--strategy",
@@ -156,6 +167,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--limit", type=int, default=50, help="Maximum screener rows to print.")
     parser.add_argument("--output", help="Optional CSV path for screener results.")
+    parser.add_argument(
+        "--cffex-varieties",
+        default=",".join(DEFAULT_CFFEX_STOCK_INDEX_VARIETIES),
+        help=(
+            "Comma-separated CFFEX varieties for position-rank mode. "
+            "Defaults to IF,IH,IC,IM."
+        ),
+    )
     return parser
 
 
@@ -215,6 +234,9 @@ def main() -> None:
         return
     if args.screen_industry_macd:
         run_industry_macd_screener(args)
+        return
+    if args.cffex_position_rank:
+        run_cffex_position_rank(args)
         return
 
     _require_backtest_args(parser, args)
@@ -360,6 +382,33 @@ def run_industry_macd_screener(args: argparse.Namespace) -> None:
             lambda value: "" if _is_missing(value) else f"{value:.4f}"
         )
     print(display.to_string(index=False))
+
+
+def run_cffex_position_rank(args: argparse.Namespace) -> None:
+    as_of = datetime.strptime(args.as_of, "%Y%m%d").date() if args.as_of else None
+    varieties = tuple(
+        variety.strip().upper()
+        for variety in args.cffex_varieties.split(",")
+        if variety.strip()
+    )
+    if not varieties:
+        raise SystemExit("CFFEX position-rank mode requires at least one variety")
+
+    config = CffexPositionRankConfig(as_of=as_of, varieties=varieties)
+    provider = OfficialCffexPositionRankProvider(config)
+    try:
+        result = build_cffex_position_rank_report(provider, config)
+    except Exception as exc:
+        raise SystemExit(f"CFFEX position-rank report failed: {exc}") from exc
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        result.to_csv(output_path, index=False)
+        print(f"saved: {output_path}")
+
+    print(f"rows: {len(result)}")
+    print(result.to_string(index=False))
 
 
 def _require_backtest_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:

@@ -74,3 +74,24 @@ def test_cli_parses_industry_macd_screener_options() -> None:
     assert args.industry_source == "ths"
     assert args.industry_lookback_days == 500
     assert args.request_pause_seconds == 2
+
+
+def test_cli_parses_cffex_position_rank_options() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "--cffex-position-rank",
+            "--as-of",
+            "20260820",
+            "--cffex-varieties",
+            "if,IC",
+            "--output",
+            "reports/cffex_positions.csv",
+        ]
+    )
+
+    assert args.cffex_position_rank is True
+    assert args.as_of == "20260820"
+    assert args.cffex_varieties == "if,IC"
+    assert args.output == "reports/cffex_positions.csv"

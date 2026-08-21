@@ -1,0 +1,80 @@
+name: CFFEX position rank report
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cffex-position-rank.yml"
+      - "share_analytics/cffex_positions.py"
+      - "share_analytics/cli.py"
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: "Report date in YYYYMMDD, defaults to today in Asia/Shanghai"
+        required: false
+        type: string
+  schedule:
+    # 18:10 Asia/Shanghai, Monday-Friday. GitHub cron uses UTC.
+    - cron: "10 10 * * 1-5"
+
+concurrency:
+  group: cffex-position-rank-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Shanghai
+      REPORT_DATE_INPUT: ${{ github.event.inputs.as_of || '' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run CFFEX position rank report
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          REPORT_DATE="$REPORT_DATE_INPUT"
+          if [ -z "$REPORT_DATE" ]; then
+            REPORT_DATE="$(date +%Y%m%d)"
+          fi
+          OUTPUT="reports/cffex_position_rank_${REPORT_DATE}.csv"
+
+          python -m share_analytics.cli \
+            --cffex-position-rank \
+            --as-of "$REPORT_DATE" \
+            --output "$OUTPUT" | tee reports/cffex_position_rank_${REPORT_DATE}.log
+
+          {
+            echo "## CFFEX position rank report ${REPORT_DATE}"
+            echo
+            echo "- Varieties: IF, IH, IC, IM"
+            echo "- Scope: top-20 long/short open interest and CITIC Futures"
+            echo "- Net hands = long hands - short hands"
+            echo
+            echo '```text'
+            cat reports/cffex_position_rank_${REPORT_DATE}.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cffex-position-rank-report
+          path: reports/
+          retention-days: 30
