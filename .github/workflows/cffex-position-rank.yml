@@ -14,9 +14,14 @@ on:
         description: "Report date in YYYYMMDD, defaults to today in Asia/Shanghai"
         required: false
         type: string
+      recipient_email:
+        description: "Report recipient email"
+        required: false
+        type: string
+        default: "hfutzhanghb@163.com"
   schedule:
-    # 18:10 Asia/Shanghai, Monday-Friday. GitHub cron uses UTC.
-    - cron: "10 10 * * 1-5"
+    # 17:00 Asia/Shanghai, Monday-Friday. GitHub cron uses UTC.
+    - cron: "0 9 * * 1-5"
 
 concurrency:
   group: cffex-position-rank-report
@@ -29,6 +34,7 @@ jobs:
     env:
       TZ: Asia/Shanghai
       REPORT_DATE_INPUT: ${{ github.event.inputs.as_of || '' }}
+      RECIPIENT_EMAIL: ${{ github.event.inputs.recipient_email || vars.RECIPIENT_EMAIL || 'hfutzhanghb@163.com' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -70,6 +76,132 @@ jobs:
             cat reports/cffex_position_rank_${REPORT_DATE}.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Email report
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST || vars.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || vars.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME || vars.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD || vars.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM || vars.SMTP_FROM }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import csv
+          from email.message import EmailMessage
+          from html import escape
+          import mimetypes
+          from pathlib import Path
+          import os
+          import smtplib
+          import ssl
+
+          required = ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]
+          missing = [name for name in required if not os.environ.get(name)]
+          if missing:
+              raise SystemExit(f"Missing required SMTP secrets: {', '.join(missing)}")
+
+          report_files = sorted(Path("reports").glob("cffex_position_rank_*.csv"))
+          log_files = sorted(Path("reports").glob("cffex_position_rank_*.log"))
+          if not report_files:
+              raise SystemExit("No CFFEX position-rank CSV report found.")
+
+          report_path = report_files[-1]
+          log_path = log_files[-1] if log_files else None
+          report_date = report_path.stem.removeprefix("cffex_position_rank_")
+          rows = list(csv.DictReader(report_path.open(encoding="utf-8")))
+          columns = [
+              ("trade_date", "交易日"),
+              ("variety", "品种"),
+              ("symbol", "合约"),
+              ("scope", "口径"),
+              ("long_hands", "多单"),
+              ("short_hands", "空单"),
+              ("net_hands", "净量"),
+          ]
+
+          def format_value(column: str, value: str) -> str:
+              if column in {"long_hands", "short_hands", "net_hands"}:
+                  return f"{int(value):,}"
+              return value
+
+          header = "| " + " | ".join(label for _, label in columns) + " |"
+          separator = "| " + " | ".join("---" for _ in columns) + " |"
+          body = [
+              "| " + " | ".join(format_value(column, row.get(column, "")) for column, _ in columns) + " |"
+              for row in rows
+          ]
+          markdown_table = "\n".join([header, separator, *body])
+          html_rows = "".join(
+              "<tr>"
+              + "".join(f"<td>{escape(format_value(column, row.get(column, '')))}</td>" for column, _ in columns)
+              + "</tr>"
+              for row in rows
+          )
+
+          message = EmailMessage()
+          message["Subject"] = f"中金所股指期货持仓排名 {report_date}"
+          message["From"] = os.environ.get("SMTP_FROM") or os.environ["SMTP_USERNAME"]
+          message["To"] = os.environ["RECIPIENT_EMAIL"]
+          message.set_content(
+              "\n".join(
+                  [
+                      f"中金所股指期货持仓排名 {report_date}",
+                      "",
+                      "口径：前20名多空持仓合计，以及中信期货多空持仓。",
+                      "净量 = 多单 - 空单。",
+                      "",
+                      markdown_table,
+                      "",
+                      "CSV 和运行日志见附件。",
+                  ]
+              )
+          )
+          message.add_alternative(
+              f"""\
+              <!doctype html>
+              <html lang="zh-CN">
+                <head>
+                  <meta charset="utf-8">
+                  <style>
+                    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #17202a; }}
+                    table {{ border-collapse: collapse; width: 100%; margin-top: 16px; font-size: 13px; }}
+                    th, td {{ border: 1px solid #d6dde5; padding: 8px 10px; text-align: right; white-space: nowrap; }}
+                    th {{ background: #eef3f8; font-weight: 600; }}
+                    th:nth-child(1), th:nth-child(2), th:nth-child(3), th:nth-child(4),
+                    td:nth-child(1), td:nth-child(2), td:nth-child(3), td:nth-child(4) {{ text-align: left; }}
+                  </style>
+                </head>
+                <body>
+                  <h2>中金所股指期货持仓排名 {escape(report_date)}</h2>
+                  <p>口径：前20名多空持仓合计，以及中信期货多空持仓。净量 = 多单 - 空单。</p>
+                  <table><thead><tr>{''.join(f'<th>{escape(label)}</th>' for _, label in columns)}</tr></thead><tbody>{html_rows}</tbody></table>
+                </body>
+              </html>
+              """,
+              subtype="html",
+          )
+
+          for path in [report_path, log_path]:
+              if path is None:
+                  continue
+              content_type, _ = mimetypes.guess_type(path.name)
+              maintype, subtype = (content_type or "application/octet-stream").split("/", 1)
+              message.add_attachment(path.read_bytes(), maintype=maintype, subtype=subtype, filename=path.name)
+
+          port = int(os.environ.get("SMTP_PORT") or "465")
+          if port == 465:
+              with smtplib.SMTP_SSL(os.environ["SMTP_HOST"], port, context=ssl.create_default_context()) as smtp:
+                  smtp.login(os.environ["SMTP_USERNAME"], os.environ["SMTP_PASSWORD"])
+                  smtp.send_message(message)
+          else:
+              with smtplib.SMTP(os.environ["SMTP_HOST"], port) as smtp:
+                  smtp.starttls(context=ssl.create_default_context())
+                  smtp.login(os.environ["SMTP_USERNAME"], os.environ["SMTP_PASSWORD"])
+                  smtp.send_message(message)
+          PY
 
       - name: Upload report artifact
         if: always()
